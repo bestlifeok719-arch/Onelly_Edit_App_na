@@ -1,0 +1,100 @@
+v14 - hanqinnoota qofa (render/Fast/Standard export saffisa hin tuqamne)
+Faayila jijjiirame: www/index.html (nativeExport qofa), native/FastRenderPlugin.java (stat() method +).
+1. Source video copy: chunk itti aanu osoo duraan dubbifamaa jiruu isa duraa barreeffama (pipelined).
+2. Source video yeroo duraa copy ta'e, export itti aanu irratti deebi'ee copy hin ta'u (stat() fi blob size wajjin mirkaneessa).
+3. Bitrate = min(bitrate filatame, source bitrate x 1.4)  -> GB akka malee hin guddatu. (ml: 'ovx 4.7->1.6 Mbps' info keessatti mul'ata)
+4. Overlay frame hedduu (text sochii) hojjetamu yeroo screen hin cufamu; "🖼 x%" mul'ata.
+5. Overlay PNG barreeffama 6-6 walqabatee.
+Hin tuqamne: Media3 render, Fast Export, Standard (WebCodecs) export, smart copy, UI, feature kamiyyuu.
+
+v14 - kutaa 2ffaa (native export UI/diagnostic qofa)
+6. ETA ("3:52:51 left") amma yeroo render jalqabee qofa herregama (duraan copy+overlay prep dabalatee ture).
+7. Pause button native export keessatti hin dalagu ture -> dhokfameera.
+8. Yeroo export gidduutti info line: copy Xs · overlays Ys · render ⚡ N× real-time (saffisa dhugaa).
+9. "🖼 🖼" emoji lama sirreeffame.
+
+v14 - kutaa 3ffaa
+10. Progress tokko: copy 0-15% -> overlays 15-20% -> render 20-100% (1% irraa 100% tokko deema; ETA render irraa qofa).
+11. Video xumuramee booda app keessatti kuufama (auto-gallery hin jiru). Done screen: ▶ Play (app keessatti) | ⬇ Save to phone | Close.
+12. Bar irra 📁 button: "My exports" (Play / Save to phone / Delete).
+13. FastRenderPlugin.java: keepExport(), deleteExport(), stat(abs), saveToGallery(abs, keep) dabalame.
+
+v14 - kutaa 4ffaa
+14. Cancel dhugaa: render keessatti Cancel yoo tuqame export dhaabbata, faayila walakkaa haqama, screen cufama (duraan hin cufamu ture).
+15. Pause dhugaa (APK haaraa): frame hundaaf overlay callback ni dhaabsisa; Resume ni itti fufsiisa. APK dulloomaa irratti button dhokata.
+16. Copy saffisaa: source faayila base64 malee 127.0.0.1 (token-n eegame) irra kallattiin erga. Yoo hin hojjanne, karaa duraatti (base64) ofumaan deebi'a.
+17. Diagnostic: screen irratti "src WxH codec fps · dec <maqaa> HW/SW · enc <maqaa> HW/SW max Nfps" agarsiisa; xumura irratti encoder dhugaa fayyadame.
+18. Media3 muxer timeout dhaabame (reflection; Pause yeroo dheeraa export akka hin balleessine).
+19. android.yml: step haaraa "Allow fast local upload" (cleartext 127.0.0.1 qofaaf). .github folder dabaluu hin daganiin.
+
+v14 - kutaa 5ffaa
+20. PARALLEL export: video dheeraa (>=3 daqiiqaa, clip 1, video-overlay hin jiru) kutaa 3 tti qoodamee yeroo tokkotti render ta'a (encoder phone guutuun fayyadama). Kutaaleen encode deebi'ee malee (MediaExtractor+MediaMuxer) walitti makamu. Dogoggora kamiyyuu -> ofumaan export kutaa tokkoo (duraa) irratti deebi'a; info line: "parallel off: <sababa>".
+21. Overlay prep: PNG 8-8 yeroo tokkotti (toBlob) encode ta'a -> "overlays" yeroo hir'ata.
+22. Info line: "copy Ns ⚡fast" (127.0.0.1) ykn "(b64)" (karaa duraa) agarsiisa.
+23. Java: TimedOverlay offMs, caps.par, cancel parallel kutaalee hunda dhaabsa.
+
+v14 - kutaa 6ffaa
+24. % tokko: gubbaa fi jalaa lamaanuu % wal fakkaataa agarsiisu (duraan jalaa % render qofa ture).
+25. Copy fi overlays yeroo tokkotti (walitti) hojjatamu; lamaan 0-20% guutu; render 20-100%.
+26. Overlay PNG: toBlob (8 parallel) bakka toDataURL (sync) deebi'e (yeroo 122s -> 307s ta'uun shakkame); info: "N layers, X ms each".
+27. Pause: progress/ETA ni dhaabata; Java thread tokko tokkoon eeggataa jiru lakkaa'a ("⏸ N render threads are waiting ✓" ykn "⚠ nothing is waiting").
+28. Parallel: info xumura irratti "pieces a/b/c s, join Ns".
+
+v14 - kutaa 7ffaa
+29. Parallel join fashale yoo ta'e: export kutaa tokkoo irratti deebi'a ture, bar 99% irratti hafa ture. Amma sababni battaluma agarsiifama ("⚠ parallel off → normal mode: ...") fi bar 20% irratti deebi'a.
+30. Join: video PTS (B-frame) hin jijjiiramu; dogoggora keessatti "join/<stage>: <Exception>" agarsiisa.
+31. Diagnostic line: "free X GB" (diskii hafe) dabalame.
+32. Overlay layer: full-frame PNG (1280x720, 134 ms) bakka rectangle text qofa (crop) encode; Java TimedOverlay x,y irratti kaa'a. Canvas willReadFrequently.
+33. Overlay PNG barreessuu irratti Pause hojjata; copy "✓reused" (duraan "(b64)" jedhamee dogoggore).
+
+v14 - kutaa 8ffaa (diagnostic qofa)
+34. Diagnostic line: overlay hundaa (kind, yeroo, slices, box) fi "per layer: draw X + scan Y + png Z ms" agarsiisa.
+35. "parallel off: <sababa>" (clips lakkoofsa, video overlay, ...) callaa hin ta'u.
+
+v14 - kutaa 9ffaa
+36. Parallel (kutaa 3) amma overlay VIDEO/sticker (kind 'vid') wajjin hojjata (duraan "parallel off: video overlay" ture). OverlayVideo.setOffsetUs; kutaa hundaaf decoder mataa isaa.
+37. Layer scan: bakka overlay mul'ate (union box + 16px) qofa; yoo cittuu daangaa tuqe scan guutuu. (scan 30 ms -> ~8 ms tilmaama).
+
+v15 - Fast Export Save fix (jijjiirama tokko qofa: www/index.html, kutaa "Fast Export" keessa)
+38. Fast Export xumura irratti "Save video": APK keessatti faayilli guddaan (1.3 GB) blob->base64->bridge karaan hin deemu ture (hin hojjatu). Amma faayilli karaa saffisaa 127.0.0.1 (raw bytes, base64 malee) app keessatti erga, size mirkaneessa, Movies/OnellyEdit tti olkaa'a; erga booda "share" ni dhiyaata. Dogoggora kamiyyuu -> karaan duraa (duriin turerre) ofumaan deebi'a.
+Hin tuqamne: Standard export, native render, Fast Export copy logic, Java kamiyyuu.
+v16 - (1) parallel pieces 3 -> 5 (1080p/720p), 3 for 4K; if >3 pieces fail, retry with 3 before one-piece mode. (2) TimedOverlay: auto-detects absolute-time timestamps; info line shows 'ovl calls/hits' per overlay (hits=0 means overlay never drawn). Fast Export & Standard (WebCodecs) not touched. NOT compiled/tested on device.
+v16b - overlay VIDEO sound is now mixed into the export (short + long mixers); audio pass-through and native export are skipped when an overlay video has sound (native cannot mix it yet).
+v16c - overlay editor: Split + Duplicate (text/sticker/photo/overlay video, with effects) and Split/Duplicate/Delete for sounds via the bar under the preview; overlay video loops (o.in offset + modulo) when its bar is longer than the video; left-handle trim on overlay video; export/audio follow the same rule.
+v16d - NATIVE export now also handles music/extra audio, overlay-video sound, clip volume, audio fades: GPU renders video-only (mute), JS mixes audio (same mixer as browser export) into AAC aud.m4a, new FR.muxAudio joins both without re-encoding. Still browser path for: speed/rotate/flip/filter clip edits, background blur/color, blend mode, chroma key, long video overlays. NOT compiled/tested on device.
+v16e - sound for native export is STREAMED to storage (fragmented AAC mp4 via StreamTarget, FR.write with pos) instead of held in RAM: memory stays flat for any video length.
+v16f - FIX: looped/split overlay videos stay on the native path (one native entry per loop cycle, OverlayVideo inMs + decoder freed after each part; was refused as 'video overlay too long'). Volume 0-300% for music, clip and overlay video (🔊 button in the bar under the preview; overlay video is audible in preview). Keyframes (◆ +/−/✕) for the original clip zoom/X/Y in the Zoom panel; they survive Split. Clips with keyframes use the browser export path. NOT compiled/tested on device.
+v16g - ROOT CAUSE of 'overlays missing' in native export: effects were set on the Composition and Media3 never called the overlays (ovl calls/hits 0/0@-1). Effects now sit on the EditedMediaItem (single item / every parallel piece). Safety net: if no overlay was drawn at all, the native result is discarded and the browser export runs. Several clips + overlays -> browser export. NOT compiled/tested on device.
+v16h - Native GPU (B4) switched OFF (never drew overlays). Browser export: decoder waits 5 s and retries hardware once before software/CPU-canvas mode; software encoders disabled (heat).
+v16i - fix build error: EditedMediaItem.buildUpon() is not public in Media3 1.4.1 -> items rebuilt from their MediaItem (miList). Zip no longer contains .github (your own android.yml stays).
+v16j - REVERT: native path is back for projects WITHOUT overlays/sound edits (fast copy + instant Save, as before). Overlays or sound mixing -> browser export.
+v16k - REVERT to v15 behaviour in Standard/Fast export engine: software helper encoders back on, decoder stall timeout back to 1.8 s (no extra hardware retry).
+v16l - Standard + Fast Export results are stored inside the app automatically (127.0.0.1 pipe + keepExport), Done screen: Play / Save to phone (one tap, no % counter) / Close. My exports (📁): Back, Play, Edit (re-edit: imports the video as a clip), Save to phone, Delete. Pause/Cancel code untouched.
+v16m - export is mirrored into app storage while it is written (upload server accepts &pos=): at the end it is only renamed (no copy). File name OnellyEdit_<Fast|Standard>_<res>_<date-time>.mp4; My exports shows 'Onelly Edit · Fast/Standard Export' + a one-line plain explanation, resolution, length, size. Falls back to the end-copy if streaming fails.
+
+v17 - NEW 🚀 TURBO export, level 1 (separate: native/TurboPlugin.java + www/turbo.js; Fast / Standard / FastRenderPlugin / OverlayVideo NOT changed).
+Touched only to wire it in: MainActivity (registerPlugin), index.html (one <script src="turbo.js"> at the end), android.yml (flat-upload file list).
+Level 1 = one clip (cut) + still text/sticker/photo overlays + brightness/contrast/saturation/hue filter. Hardware decode -> GPU -> hardware H.264 (no software fallback) -> MP4.
+Button "🚀 Turbo" appears next to "Start export" (APK only). Anything else (several clips, speed/rotate, sepia, moving/animated overlay, overlay video, music, fade, blend, chroma) -> Standard export runs, with the reason shown.
+Safety: if overlays exist but Media3 never drew them (ovl calls/hits), the Turbo result is discarded and Standard export runs. Info line shows 'ovl calls/hits' and 'N× real-time'.
+NOT compiled / tested on device. Please send the info line from the Done screen (or the error).
+v17b - turbo.js: when Turbo falls back to Standard, the reason is written in the info line ('🚀 Turbo off: ...').
+v17c - Turbo level 2: overlay VIDEO (not moving, muted). New native/TurboOverlayVideo.java (own copy, independent of OverlayVideo / FastRenderPlugin). Loops/trim via the same pieces as Standard. Overlay video sound is NOT mixed yet -> Turbo refuses unless the overlay video is muted (🔊), the reason is shown in the info line. Info line adds 'ov-video frames N'. If no overlay frame reached the GPU, the Turbo result is discarded and Standard runs.
+v17d - TurboOverlayVideo is now a nested class inside TurboPlugin.java (one file less to upload; fixes 'cannot find symbol' when the separate file was missing).
+v17e - Turbo is FULLY independent: own file/keep/gallery methods in TurboPlugin.java, own progress/play/save screen in turbo.js. No use of FastRender plugin, Standard export or its UI. No automatic fallback: if Turbo cannot do the project or fails, it shows the reason and stops (never a wrong video).
+v17f - Turbo: clip volume (0..3 gain, mute) now supported (ChannelMixingAudioProcessor, mono/stereo).
+v17g - Turbo: overlay-video SOUND is mixed (web side renders one 48k stereo track; native OverlayMix processor adds it onto the clip sound). Unmuted overlay videos no longer refused. Info line: 'ov-sound frames N'.
+v17h - Turbo: own ⏸ Pause / ▶ Resume during render (TurboPlugin pause()/resume(); a transparent PauseGate overlay stops the frame pipeline). Paused time is not counted in speed/ETA.
+v17i - Turbo: frame rate 24/30/60 (frames above the chosen rate are dropped), even sizes for 144p..4K, up to 400 overlays (memory check for overlays visible at the same moment).
+v17j - Turbo: own frame-rate row 24/30/48/60/90/120 (tap again = follow the panel). Above the source's own rate no frames are invented; high-frame-rate sources (90/120) keep their rate. Bitrate scales with the chosen fps.
+v17k - Turbo level 3: moving / fading / popping / sliding / keyframed text, emoji, sticker, photo overlays (picture drawn once, movement = sampled table, per-frame Canvas transform in AnimOverlay). Still refused: typing / word-by-word text, moving overlay VIDEO, blend, chroma. Turbo has its OWN entry: in Fast Export's sheet under 'Standard export', or (projects that are not Fast-eligible) a small sheet 'Standard export / 🚀 Turbo'; own settings sheet (resolution 144p-4K, quality, fps 24-120). Nothing is added to the Standard export panel any more.
+v17l - Turbo speed: ALL overlays (still / moving / video) are drawn into ONE layer bitmap per frame (one GPU upload instead of one per overlay); source copy uses Turbo's own localhost upload (no base64, 48 MB pieces); ⏸ Pause / ▶ Resume works from the very start (copy, overlays, render).
+v17m - Turbo: added music / extra audio (volume, fade in/out, equalizer) mixed with overlay-video sound into one track written in 60 s windows (any length); native OverlayMix reads the track from the file in blocks. Plain move/fade overlays use a cheap copy draw. 'N× real-time' is shown from the first 0.4% of the render.
+v17n - Turbo: overlay pictures of ANY size (long scrolling text, huge stickers) are cut into tiles; the phone decodes only the tiles on screen. RAM guard for extra sound (clear message instead of a crash). Temporary overlay files are deleted after export.
+v17o - Turbo has NO length / count limits: extra sound is decoded and mixed natively (MediaCodec, 30 s windows, volume / fade / equalizer) so any length works; no limit on the number of overlays (one layer bitmap, tiles on screen only).
+v17p - Turbo: layer pipeline (a helper thread already draws frame N+1 while the GPU / encoder work on frame N; switches itself off when its guess is often wrong) and a profile in the info line ('ms: draw / still / anim / vid / wait / pipe hits/misses').
+v17q - Turbo: (1) overlay videos up to 1280 px use the phone's CPU (software) decoder, in parallel with the hardware codec that the main video + encoder already keep busy; YUV->ARGB reads plain arrays (faster); (2) preparation is parallel: the phone builds the sound while the pictures are prepared; (3) info line shows 'prep: video-copy / pictures / sound' and 'ov-decode / convert / sw×N' so the next bottleneck is visible.
+v17r - Turbo PARALLEL export: the video is cut into 3..30 equal pieces (about 40 s each; under 20 s = single export), 2..4 pieces are rendered at the same time (the phone decides from its CPU cores and from the memory one overlay layer needs), the sound is made in one separate pass (volume, overlay sound, music), and the pieces + sound are joined WITHOUT re-encoding (MediaMuxer). Any problem (codec settings of the pieces differ, a piece fails, ...) -> the single export does the whole job by itself (info line 'par: ...'). Overlay videos seek to the start of their piece. A clip without a sound track + extra sound is refused with a clear message (never a silent wrong video).
+v17s - build fix: YUV convert uses byte[] indexing (cannot find symbol .get on arrays).
+v17t - Turbo survives the page being reloaded / screen off / another app: the job state lives in the native plugin (status / clearStatus); on load turbo.js re-attaches (live progress, Done screen or the error). Screen stays on during export; foreground service + wake lock (manifest lines added by android.yml step 'Turbo keeps running...'). Pieces in parallel only when the CPU really allows it (fewer at once with many overlay videos; else the single export).
+v17u - android.yml: if a zip named Onelly_Edit_App*.zip is in the repo root, the build unpacks it first (one upload from a phone is enough; flat old copies are removed).
