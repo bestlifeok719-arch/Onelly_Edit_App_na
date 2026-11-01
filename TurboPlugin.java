@@ -784,10 +784,12 @@ public class TurboPlugin extends Plugin {
     private volatile double jobP = 0;
     private volatile JSObject jobResult;
     private volatile String jobError = "";
+    private volatile String jobPhase = ""; // what the phone is doing right now (shown live by the web side)
     private PowerManager.WakeLock wl;
 
     private void jobStart() {
         jobState = "running";
+        jobPhase = "starting";
         jobP = 0;
         jobResult = null;
         jobError = "";
@@ -820,8 +822,21 @@ public class TurboPlugin extends Plugin {
         JSObject o = new JSObject();
         o.put("state", jobState);
         o.put("p", jobP);
+        o.put("phase", jobPhase);
         if ("done".equals(jobState) && jobResult != null) o.put("result", jobResult);
         if ("failed".equals(jobState)) o.put("error", jobError);
+        call.resolve(o);
+    }
+
+    /** Free space for the working files (the video is copied into the app's own storage). */
+    @PluginMethod
+    public void space(PluginCall call) {
+        JSObject o = new JSObject();
+        try {
+            o.put("free", getContext().getCacheDir().getUsableSpace());
+        } catch (Throwable e) {
+            o.put("free", -1);
+        }
         call.resolve(o);
     }
 
@@ -2189,11 +2204,13 @@ public class TurboPlugin extends Plugin {
         void begin() throws Exception {
             active = call;
             setPaused(false);
+            jobPhase = "checking the video";
             mixers.clear();
             int withAudio = 0;
             for (ClipSpec c : specs) if (hasAudioTrack(new File(cache, c.src))) withAudio++;
             audioNeeded = withAudio > 0;
             if (audioNeeded && withAudio != specs.size()) throw new Exception("some clips have no sound track (level 5)");
+            jobPhase = audioNeeded ? "sound pass + pieces" : "pieces";
             if (audioNeeded) startAudio();
             launch();
             main.postDelayed(new Runnable() {
@@ -2211,6 +2228,7 @@ public class TurboPlugin extends Plugin {
                     JSObject o = new JSObject();
                     o.put("p", tot > 0 ? Math.min(99.0, 100.0 * got / tot) : 0);
                     jobP = tot > 0 ? Math.min(99.0, 100.0 * got / tot) : 0;
+                    jobPhase = "pieces " + doneCount + "/" + segs.size() + " done, " + running + " at once" + (audioNeeded ? (audioDone ? ", sound done" : ", sound …") : "") + thermalNote;
                     notifyListeners("progress", o);
                     main.postDelayed(this, 500);
                 }
@@ -2246,8 +2264,32 @@ public class TurboPlugin extends Plugin {
             audioTr.start(comp, audioFile.getAbsolutePath());
         }
 
+        String thermalNote = "";
+
+        /** How many pieces may run at once right now: fewer when the phone is hot (so it cools down instead of throttling or shutting the app). */
+        int allowedNow() {
+            int allowed = maxParallel;
+            thermalNote = "";
+            try {
+                if (Build.VERSION.SDK_INT >= 29) {
+                    PowerManager pm = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
+                    int ts = pm.getCurrentThermalStatus();
+                    if (ts >= PowerManager.THERMAL_STATUS_SEVERE) {
+                        allowed = 1;
+                        thermalNote = ", phone very hot: 1 at a time";
+                    } else if (ts >= PowerManager.THERMAL_STATUS_MODERATE) {
+                        allowed = Math.max(1, maxParallel / 2);
+                        thermalNote = ", phone warm: " + allowed + " at a time";
+                    }
+                }
+            } catch (Throwable ignore) {
+            }
+            return allowed;
+        }
+
         void launch() {
-            while (!failed && running < maxParallel && next < segs.size()) {
+            final int allowed = allowedNow();
+            while (!failed && running < allowed && next < segs.size()) {
                 Seg s = segs.get(next++);
                 try {
                     startSeg(s);
@@ -2312,6 +2354,7 @@ public class TurboPlugin extends Plugin {
             if (failed || finishing) return;
             if (doneCount < segs.size() || (audioNeeded && !audioDone)) return;
             finishing = true;
+            jobPhase = "joining the pieces";
             Thread th = new Thread(() -> {
                 try {
                     stitch(segs, audioNeeded ? audioFile : null, outFile);

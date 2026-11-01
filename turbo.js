@@ -93,6 +93,10 @@
     } catch (_) { }
     delete window.__turboSrc[nm];
     await T.remove({ path: nm });
+    try { /* the video is copied into the app's own storage: say it clearly when there is not enough room */
+      var sp = await T.space();
+      if (sp && sp.free >= 0 && sp.free < blob.size * 1.05 + 400e6) throw new Error('Not enough free storage on the phone: this video needs about ' + (blob.size / 1e9).toFixed(1) + ' GB of working space, only ' + (sp.free / 1e9).toFixed(1) + ' GB is free. Free some space and try again.');
+    } catch (e) { if (/storage/.test(String(e && e.message))) throw e; }
     var done = false;
     try { /* fast way: raw bytes over 127.0.0.1 in 48 MB pieces (no base64); pausing works between pieces */
       var u = await T.upInfo(), PC = 50331648;
@@ -575,10 +579,24 @@
           }
         });
       }
+      ovMs = performance.now() - t1;
+      /* c) GPU render: live progress, speed and the phase the phone is in */
+      sub = await T.addListener('progress', function (e) {
+        if (UI.paused) return;
+        bump(.2 + .8 * (e.p || 0) / 100); status('🚀 ' + pct());
+        var q = (e.p || 0) / 100, x = $q('#tbe');
+        if (q > .004 && r0) { var el = (performance.now() - r0 - (pzRef ? pzRef.ms : 0)) / 1000; if (x) x.textContent = fmtT(el * (1 - q) / q) + ' left'; info(W + '×' + H + ' · ' + F + ' fps · ' + X('b') + ' · render ' + (Tt * q / el).toFixed(1) + '× real-time'); }
+      });
+      bump(.2); status('🚀 ' + pct());
+      r0 = performance.now();
+      /* the native side starts un-paused: if the person paused earlier, pause it again right away */
+      if (UI.paused) setTimeout(function () { try { T.pause(); } catch (_) { } }, 400);
+      var phIv = setInterval(async function () { try { if (UI.paused) return; var ps = await T.status(); var e1 = $q('#tbe'); if (e1 && ps && ps.phase && ps.state === 'running' && !/left$/.test(e1.textContent)) e1.textContent = ps.phase; } catch (_) { } }, 1500);
       var res = await T.render({
         src: src, out: 'turbo_out.mp4', width: W, height: H, bitrate: br, fps: F, rot: ((c.rot || 0) % 360 + 360) % 360, flip: c.flip ? 1 : 0, inMs: inMs, outMs: outMs, volume: c.vol == null ? 1 : c.vol, mix: mix,
         filter: c.f ? { b: c.f.b, c: c.f.c, s: c.f.s, hue: c.f.hue } : null, overlays: recs, clips: clipSpecs, looks: LK.file, blend: recs.some(function (r) { return r.bm; }) ? { frag: GLSL.blend } : null, fade: (window.FADE && (FADE.i || FADE.o)) ? { i: FADE.i || 0, o: FADE.o || 0, total: Tt } : null
       });
+      clearInterval(phIv);
       var rend = performance.now() - r0 - (pzRef ? pzRef.ms : 0);
       /* safety net: if overlays exist but the GPU never drew them, this video is wrong -> refuse it */
       var nVid = recs.filter(function (r) { return r.type === 'vid'; }).length, nPic = recs.length - nVid;
@@ -595,6 +613,7 @@
       info(res.sizeMB + ' MB · ' + (res.enc ? 'enc ' + res.enc + ' · ' : '') + X('b') + ' L2 · copy ' + secs(cp) + ' · overlays ' + secs(ovMs) + ' · render ' + secs(rend) + ' (' + (Tt / (rend / 1000)).toFixed(1) + '× real-time)' + (res.ovDiag ? ' · ovl calls/hits ' + res.ovDiag : '') + (res.par ? ' · par: ' + res.par : '') + (res.prof ? ' · ms: ' + res.prof : '') + (' · prep: video-copy ' + secs(tm.vcopy) + ' pictures ' + secs(tm.png) + ' sound ' + secs(tm.sound) + ' (parallel) looks ' + secs(tm.looks) + ' · bridge ' + (res.par ? secs(Math.max(0, rend - (parseInt((/(\d+)s$/.exec(res.par) || [0, 0])[1], 10) || 0) * 1000)) : '-')) + (res.vdec != null && nVid ? ' · ov-decode ' + secs(res.vdec) + ' convert ' + secs(res.vconv) + ' sw×' + res.vsw : '') + (mix ? ' · ov-sound frames ' + res.mixFrames : '') + (nVid ? ' · ov-video frames ' + res.vidShown + ' (' + secs(res.vidMs) + ')' : ''));
       showDone(T, kept, nm0);
     } finally {
+      try { if (typeof phIv !== 'undefined') clearInterval(phIv); } catch (_) { }
       try { if (sub) sub.remove(); } catch (_) { }
       try { await T.clearStatus(); } catch (_) { } /* the result was handed over: nothing left to recover */
       try { var tl2 = (typeof LK !== 'undefined' && LK && LK.tmp) || []; for (var tz = 0; tz < tl2.length; tz++) await T.remove({ path: tl2[tz] }); } catch (_) { }
