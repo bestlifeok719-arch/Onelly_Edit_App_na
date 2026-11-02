@@ -1288,7 +1288,7 @@ public class TurboPlugin extends Plugin {
                     call.reject("no sound");
                     return;
                 }
-                final int RATE = 48000, WIN = RATE * 30;
+                final int RATE = 48000, WIN = RATE * 20;
                 long len = (long) Math.ceil((w1 - w0) * RATE);
                 File out = cacheFile("tmix.pcm");
                 out.delete();
@@ -1304,36 +1304,75 @@ public class TurboPlugin extends Plugin {
                 float[] acc = new float[WIN * 2];
                 byte[] ob = new byte[WIN * 4];
                 int any = 0;
+                // all the sources are decoded AT THE SAME TIME (a pool of threads), window after window; the number of sources does not slow the mix down
+                java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(Math.max(2, Math.min(6, Runtime.getRuntime().availableProcessors())));
                 try (FileOutputStream fo = new FileOutputStream(out)) {
                     for (long pos = 0; pos < len; pos += WIN) {
                         if (mixCancel) throw new Exception("cancelled");
                         waitIfPaused();
-                        int n = (int) Math.min(WIN, len - pos);
+                        final int n = (int) Math.min(WIN, len - pos);
                         java.util.Arrays.fill(acc, 0, n * 2, 0f);
-                        double ts = w0 + pos / (double) RATE, te = ts + n / (double) RATE;
+                        final double ts = w0 + pos / (double) RATE, te = ts + n / (double) RATE;
+                        List<java.util.concurrent.Future<Object[]>> futs = new ArrayList<>();
                         for (int i = 0; i < ss.length(); i++) {
-                            JSONObject so = ss.getJSONObject(i);
-                            String sp = so.getString("path");
+                            final JSONObject so = ss.getJSONObject(i);
+                            final String sp = so.getString("path");
                             if (!safeName(sp) || !cacheFile(sp).exists()) continue;
-                            double vol = so.optDouble("vol", 1), fi = so.optDouble("fi", 0), fob = so.optDouble("fo", 0);
-                            double A = so.optDouble("A", 0), B = so.optDouble("B", 0);
+                            final double vol = so.optDouble("vol", 1), fi = so.optDouble("fi", 0), fob = so.optDouble("fo", 0);
+                            final double A = so.optDouble("A", 0), B = so.optDouble("B", 0);
+                            final Biquad[] eqi = eq[i];
+                            final String spath = cacheFile(sp).getAbsolutePath();
                             JSONArray pcs = so.getJSONArray("pcs");
+                            List<JSONObject> mine = new ArrayList<>();
                             for (int j = 0; j < pcs.length(); j++) {
                                 JSONObject q = pcs.getJSONObject(j);
-                                double qa = q.getDouble("a"), qb = q.getDouble("b"), qs = q.getDouble("s");
-                                double a2 = Math.max(qa, ts), b2 = Math.min(qb, te);
-                                if (b2 - a2 < 0.002) continue;
-                                float[] tmp = decodeRange(cacheFile(sp).getAbsolutePath(), qs + (a2 - qa), b2 - a2, RATE);
-                                int m = tmp.length / 2;
-                                for (Biquad bq : eq[i]) bq.run(tmp, m);
-                                int di = (int) Math.round((a2 - ts) * RATE);
+                                if (Math.min(q.getDouble("b"), te) - Math.max(q.getDouble("a"), ts) >= 0.002) mine.add(q);
+                            }
+                            // without an equalizer every piece is its own task; with one the pieces of that source stay in order in one task
+                            List<List<JSONObject>> groups = new ArrayList<>();
+                            if (eqi.length == 0) for (JSONObject q : mine) {
+                                List<JSONObject> one = new ArrayList<>();
+                                one.add(q);
+                                groups.add(one);
+                            }
+                            else if (!mine.isEmpty()) groups.add(mine);
+                            for (final List<JSONObject> grp : groups) {
+                                futs.add(pool.submit(() -> {
+                                    List<Object> res = new ArrayList<>();
+                                    for (JSONObject q : grp) {
+                                        double qa = q.getDouble("a"), qb = q.getDouble("b"), qs = q.getDouble("s");
+                                        double a2 = Math.max(qa, ts), b2 = Math.min(qb, te);
+                                        float[] tmp = decodeRange(spath, qs + (a2 - qa), b2 - a2, RATE);
+                                        int m = tmp.length / 2;
+                                        for (Biquad bq : eqi) bq.run(tmp, m);
+                                        for (int f = 0; f < m; f++) {
+                                            double tt = a2 + f / (double) RATE, g = vol;
+                                            if (fi > 0 && tt < A + fi) g = Math.min(g, vol * (tt - A) / fi);
+                                            if (fob > 0 && tt > B - fob) g = Math.min(g, vol * (B - tt) / fob);
+                                            if (g < 0) g = 0;
+                                            tmp[f * 2] *= (float) g;
+                                            tmp[f * 2 + 1] *= (float) g;
+                                        }
+                                        res.add(tmp);
+                                        res.add((int) Math.round((a2 - ts) * RATE));
+                                    }
+                                    return res.toArray();
+                                }));
+                            }
+                        }
+                        for (java.util.concurrent.Future<Object[]> fu : futs) {
+                            Object[] r;
+                            try {
+                                r = fu.get();
+                            } catch (java.util.concurrent.ExecutionException ee) {
+                                throw new Exception(String.valueOf(ee.getCause() != null ? ee.getCause().getMessage() : ee.getMessage()));
+                            }
+                            for (int k = 0; k + 1 < r.length; k += 2) {
+                                float[] tmp = (float[]) r[k];
+                                int di = (Integer) r[k + 1], m = tmp.length / 2;
                                 for (int f = 0; f < m && di + f < n; f++) {
-                                    double t = a2 + f / (double) RATE, g = vol;
-                                    if (fi > 0 && t < A + fi) g = Math.min(g, vol * (t - A) / fi);
-                                    if (fob > 0 && t > B - fob) g = Math.min(g, vol * (B - t) / fob);
-                                    if (g < 0) g = 0;
-                                    acc[(di + f) * 2] += tmp[f * 2] * (float) g;
-                                    acc[(di + f) * 2 + 1] += tmp[f * 2 + 1] * (float) g;
+                                    acc[(di + f) * 2] += tmp[f * 2];
+                                    acc[(di + f) * 2 + 1] += tmp[f * 2 + 1];
                                 }
                                 any++;
                             }
@@ -1351,6 +1390,8 @@ public class TurboPlugin extends Plugin {
                         pr.put("p", Math.min(1.0, (pos + n) / (double) len));
                         notifyListeners("mixprogress", pr);
                     }
+                } finally {
+                    pool.shutdownNow();
                 }
                 JSObject o = new JSObject();
                 o.put("path", "tmix.pcm");
@@ -2414,6 +2455,13 @@ public class TurboPlugin extends Plugin {
             o.put("prof", "draw " + sum[4] / 1000000 + " still " + sum[5] / 1000000 + " anim " + sum[6] / 1000000 + " vid " + sum[7] / 1000000
                     + " wait " + sum[8] / 1000000 + " pipe " + sum[9] + "/" + sum[10]);
             o.put("vidShown", sh);
+            StringBuilder vsb = new StringBuilder();
+            java.util.HashSet<String> seenV = new java.util.HashSet<>();
+            for (Seg s2 : segs) for (TurboOverlayVideo v2 : s2.vids) {
+                String key = v2.statKey();
+                if (seenV.add(key) && v2.avgR >= 0) vsb.append(vsb.length() > 0 ? " | " : "").append(key).append(" ").append(v2.decName).append(" avgRGB ").append(v2.avgR).append(",").append(v2.avgG).append(",").append(v2.avgB);
+            }
+            o.put("vstat", vsb.toString());
             o.put("vdec", dn / 1000000);
             o.put("vconv", cn / 1000000);
             o.put("vsw", sw);
@@ -2475,6 +2523,7 @@ public class TurboPlugin extends Plugin {
             }
             parNote = "";
             jobStart();
+            TurboOverlayVideo.allowSw = call.getData().optBoolean("swDecode", false);
             String out = call.getString("out", "turbo_out.mp4");
             JSONObject d = call.getData();
             boolean legacy = d.optJSONArray("clips") == null;
@@ -2800,9 +2849,16 @@ public class TurboPlugin extends Plugin {
         public long shown = 0; // frames actually handed to the GPU
     public volatile long decNs = 0, convNs = 0; // producer thread: decoder time / YUV->ARGB time
     public volatile boolean swDec = false;
+    public static volatile boolean allowSw = false; // the CPU decoder is OFF by default (the hardware decoder is the proven path)
+    public volatile String decName = "";
+    public volatile int avgR = -1, avgG = 0, avgB = 0; // mean colour of the first converted frame (a quick self-check that the picture is not black / green)
     private boolean ckOn = false;
     private int ckR, ckG, ckB;
     private double ckSim, ckSm;
+
+    public String statKey() {
+        return new File(path).getName() + " " + dw + "x" + dh + " rot" + srcRot;
+    }
 
     /** Chroma key (green screen): colour + similarity + smoothness, as in the preview (distances in 0..441). */
     public void setChroma(int r, int g, int b, double sim, double sm) {
@@ -2873,7 +2929,7 @@ public class TurboPlugin extends Plugin {
             }
             String vmime = f.getString(MediaFormat.KEY_MIME);
             dec = null;
-            if (Math.max(fw, fh) <= 1280) { // small / medium overlay video: the CPU decoder runs in parallel with the hardware codec, which the main video and the encoder already keep busy
+            if (allowSw && Math.max(fw, fh) <= 1280) { // (only when switched on) small / medium overlay video: the CPU decoder runs in parallel with the hardware codec, which the main video and the encoder already keep busy
                 try {
                     MediaCodecInfo[] list = new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos();
                     for (MediaCodecInfo ci : list) {
@@ -2893,6 +2949,10 @@ public class TurboPlugin extends Plugin {
                 }
             }
             if (dec == null) dec = MediaCodec.createDecoderByType(vmime);
+            try {
+                decName = dec.getName();
+            } catch (Throwable ignore) {
+            }
             f.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
             dec.configure(f, null, null, 0);
             dec.start();
@@ -2937,6 +2997,19 @@ public class TurboPlugin extends Plugin {
                             long cv0 = System.nanoTime();
                             convert(img, outArr);
                             convNs += System.nanoTime() - cv0;
+                            if (avgR < 0) {
+                                long sr = 0, sg = 0, sb = 0;
+                                int cnt = Math.max(1, outArr.length);
+                                for (int q = 0; q < outArr.length; q += 7) {
+                                    sr += (outArr[q] >> 16) & 255;
+                                    sg += (outArr[q] >> 8) & 255;
+                                    sb += outArr[q] & 255;
+                                }
+                                int m7 = Math.max(1, (outArr.length + 6) / 7);
+                                avgR = (int) (sr / m7);
+                                avgG = (int) (sg / m7);
+                                avgB = (int) (sb / m7);
+                            }
                             img.close();
                             converted = true;
                         }

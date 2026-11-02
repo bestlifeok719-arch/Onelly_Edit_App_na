@@ -600,7 +600,7 @@
       var nm0 = 'OnellyEdit_Turbo_' + S + 'p_' + new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19) + '.mp4';
       var res = await T.render({ finalName: nm0,
         src: src, out: 'turbo_out.mp4', width: W, height: H, bitrate: br, fps: F, rot: ((c.rot || 0) % 360 + 360) % 360, flip: c.flip ? 1 : 0, inMs: inMs, outMs: outMs, volume: c.vol == null ? 1 : c.vol, mix: mix,
-        filter: c.f ? { b: c.f.b, c: c.f.c, s: c.f.s, hue: c.f.hue } : null, overlays: recs, clips: clipSpecs, looks: LK.file, blend: recs.some(function (r) { return r.bm; }) ? { frag: GLSL.blend } : null, fade: (window.FADE && (FADE.i || FADE.o)) ? { i: FADE.i || 0, o: FADE.o || 0, total: Tt } : null
+        filter: c.f ? { b: c.f.b, c: c.f.c, s: c.f.s, hue: c.f.hue } : null, overlays: recs, clips: clipSpecs, looks: LK.file, swDecode: window.__turboSw === true, blend: recs.some(function (r) { return r.bm; }) ? { frag: GLSL.blend } : null, fade: (window.FADE && (FADE.i || FADE.o)) ? { i: FADE.i || 0, o: FADE.o || 0, total: Tt } : null
       });
       clearInterval(phIv);
       var rend = performance.now() - r0 - (pzRef ? pzRef.ms : 0);
@@ -615,7 +615,7 @@
       /* d) keep inside the app */
       var kept = res.kept ? { abs: res.abs } : await T.keep({ path: res.path, name: nm0 }); /* a long video is written straight into its final place */
       setP(1); $q('#tbp').textContent = '✓'; status('✅ Done'); var e2 = $q('#tbe'); if (e2) e2.textContent = '';
-      info(res.sizeMB + ' MB · ' + (res.enc ? 'enc ' + res.enc + ' · ' : '') + X('b') + ' L2 · copy ' + secs(cp) + ' · overlays ' + secs(ovMs) + ' · render ' + secs(rend) + ' (' + (Tt / (rend / 1000)).toFixed(1) + '× real-time)' + (res.ovDiag ? ' · ovl calls/hits ' + res.ovDiag : '') + (res.par ? ' · par: ' + res.par : '') + (res.prof ? ' · ms: ' + res.prof : '') + (' · prep: video-copy ' + secs(tm.vcopy) + ' pictures ' + secs(tm.png) + ' sound ' + secs(tm.sound) + ' (parallel) looks ' + secs(tm.looks) + ' · bridge ' + (res.par ? secs(Math.max(0, rend - (parseInt((/(\d+)s$/.exec(res.par) || [0, 0])[1], 10) || 0) * 1000)) : '-')) + (res.vdec != null && nVid ? ' · ov-decode ' + secs(res.vdec) + ' convert ' + secs(res.vconv) + ' sw×' + res.vsw : '') + (mix ? ' · ov-sound frames ' + res.mixFrames : '') + (nVid ? ' · ov-video frames ' + res.vidShown + ' (' + secs(res.vidMs) + ')' : ''));
+      info(res.sizeMB + ' MB · ' + (res.enc ? 'enc ' + res.enc + ' · ' : '') + X('b') + ' L2 · copy ' + secs(cp) + ' · overlays ' + secs(ovMs) + ' · render ' + secs(rend) + ' (' + (Tt / (rend / 1000)).toFixed(1) + '× real-time)' + (res.ovDiag ? ' · ovl calls/hits ' + res.ovDiag : '') + (res.par ? ' · par: ' + res.par : '') + (res.prof ? ' · ms: ' + res.prof : '') + (' · prep: video-copy ' + secs(tm.vcopy) + ' pictures ' + secs(tm.png) + ' sound ' + secs(tm.sound) + ' (parallel) looks ' + secs(tm.looks) + ' · bridge ' + (res.par ? secs(Math.max(0, rend - (parseInt((/(\d+)s$/.exec(res.par) || [0, 0])[1], 10) || 0) * 1000)) : '-')) + (res.vstat ? ' · ov-video look: ' + res.vstat : '') + (res.vdec != null && nVid ? ' · ov-decode ' + secs(res.vdec) + ' convert ' + secs(res.vconv) + ' sw×' + res.vsw : '') + (mix ? ' · ov-sound frames ' + res.mixFrames : '') + (nVid ? ' · ov-video frames ' + res.vidShown + ' (' + secs(res.vidMs) + ')' : ''));
       showDone(T, kept, nm0);
     } finally {
       try { if (typeof phIv !== 'undefined') clearInterval(phIv); } catch (_) { }
