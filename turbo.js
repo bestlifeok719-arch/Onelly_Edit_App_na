@@ -101,18 +101,23 @@
     try { /* fast way: raw bytes over 127.0.0.1 in 48 MB pieces (no base64); pausing works between pieces */
       var u = await T.upInfo(), PC = 50331648;
       if (u && u.port) {
-        for (var o = 0; o < blob.size; o += PC) {
-          await gate();
-          var end = Math.min(blob.size, o + PC);
-          await new Promise(function (res, rej) {
-            var x = new XMLHttpRequest();
-            x.open('POST', 'http://127.0.0.1:' + u.port + '/put?name=' + encodeURIComponent(nm) + '&t=' + u.token + '&pos=' + o);
-            x.upload.onprogress = function (e) { if (e.lengthComputable) onp((o + e.loaded) / blob.size); };
+        var pcs = [], loaded = [];
+        for (var o = 0; o < blob.size; o += PC) { pcs.push([o, Math.min(blob.size, o + PC)]); loaded.push(0); }
+        var sendPiece = function (idx) {
+          return new Promise(function (res, rej) {
+            var x = new XMLHttpRequest(), o0 = pcs[idx][0];
+            x.open('POST', 'http://127.0.0.1:' + u.port + '/put?name=' + encodeURIComponent(nm) + '&t=' + u.token + '&pos=' + o0);
+            x.upload.onprogress = function (e) { loaded[idx] = e.loaded; var sum = 0; for (var q = 0; q < loaded.length; q++) sum += loaded[q]; onp(sum / blob.size); };
             var iv = setInterval(function () { if (UI.cancel) { try { x.abort(); } catch (_) { } } }, 300);
             x.onload = function () { clearInterval(iv); x.status === 200 ? res() : rej(new Error('upload ' + x.status)); };
             x.onerror = x.onabort = x.ontimeout = function () { clearInterval(iv); rej(new Error(UI.cancel ? 'cancelled' : 'upload network')); };
-            x.send(blob.slice(o, end));
+            x.send(blob.slice(pcs[idx][0], pcs[idx][1]));
           });
+        };
+        for (var bi = 0; bi < pcs.length; bi += 3) { /* three pieces at a time: the phone's storage is faster when it is kept busy */
+          await gate();
+          var grp = []; for (var gi = bi; gi < Math.min(pcs.length, bi + 3); gi++) grp.push(sendPiece(gi));
+          await Promise.all(grp);
         }
         var r3 = await T.stat({ path: nm });
         done = !!(r3 && r3.exists && r3.size === blob.size);
@@ -592,7 +597,8 @@
       /* the native side starts un-paused: if the person paused earlier, pause it again right away */
       if (UI.paused) setTimeout(function () { try { T.pause(); } catch (_) { } }, 400);
       var phIv = setInterval(async function () { try { if (UI.paused) return; var ps = await T.status(); var e1 = $q('#tbe'); if (e1 && ps && ps.phase && ps.state === 'running' && !/left$/.test(e1.textContent)) e1.textContent = ps.phase; } catch (_) { } }, 1500);
-      var res = await T.render({
+      var nm0 = 'OnellyEdit_Turbo_' + S + 'p_' + new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19) + '.mp4';
+      var res = await T.render({ finalName: nm0,
         src: src, out: 'turbo_out.mp4', width: W, height: H, bitrate: br, fps: F, rot: ((c.rot || 0) % 360 + 360) % 360, flip: c.flip ? 1 : 0, inMs: inMs, outMs: outMs, volume: c.vol == null ? 1 : c.vol, mix: mix,
         filter: c.f ? { b: c.f.b, c: c.f.c, s: c.f.s, hue: c.f.hue } : null, overlays: recs, clips: clipSpecs, looks: LK.file, blend: recs.some(function (r) { return r.bm; }) ? { frag: GLSL.blend } : null, fade: (window.FADE && (FADE.i || FADE.o)) ? { i: FADE.i || 0, o: FADE.o || 0, total: Tt } : null
       });
@@ -607,8 +613,7 @@
       if (mix && !(res.mixFrames > 0)) throw new Error('overlay sound was not mixed');
       if (nVid && !(res.vidShown > 0)) throw new Error('overlay video was not drawn (frames ' + res.vidShown + ')');
       /* d) keep inside the app */
-      var nm0 = 'OnellyEdit_Turbo_' + S + 'p_' + new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19) + '.mp4';
-      var kept = await T.keep({ path: res.path, name: nm0 });
+      var kept = res.kept ? { abs: res.abs } : await T.keep({ path: res.path, name: nm0 }); /* a long video is written straight into its final place */
       setP(1); $q('#tbp').textContent = '✓'; status('✅ Done'); var e2 = $q('#tbe'); if (e2) e2.textContent = '';
       info(res.sizeMB + ' MB · ' + (res.enc ? 'enc ' + res.enc + ' · ' : '') + X('b') + ' L2 · copy ' + secs(cp) + ' · overlays ' + secs(ovMs) + ' · render ' + secs(rend) + ' (' + (Tt / (rend / 1000)).toFixed(1) + '× real-time)' + (res.ovDiag ? ' · ovl calls/hits ' + res.ovDiag : '') + (res.par ? ' · par: ' + res.par : '') + (res.prof ? ' · ms: ' + res.prof : '') + (' · prep: video-copy ' + secs(tm.vcopy) + ' pictures ' + secs(tm.png) + ' sound ' + secs(tm.sound) + ' (parallel) looks ' + secs(tm.looks) + ' · bridge ' + (res.par ? secs(Math.max(0, rend - (parseInt((/(\d+)s$/.exec(res.par) || [0, 0])[1], 10) || 0) * 1000)) : '-')) + (res.vdec != null && nVid ? ' · ov-decode ' + secs(res.vdec) + ' convert ' + secs(res.vconv) + ' sw×' + res.vsw : '') + (mix ? ' · ov-sound frames ' + res.mixFrames : '') + (nVid ? ' · ov-video frames ' + res.vidShown + ' (' + secs(res.vidMs) + ')' : ''));
       showDone(T, kept, nm0);
@@ -656,9 +661,9 @@
       return;
     }
     if (st.state === 'done' && st.result) {
-      ui(); var nm0 = 'OnellyEdit_Turbo_' + new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19) + '.mp4';
+      ui(); var nm0 = (st.result.abs ? String(st.result.abs).split('/').pop() : '') || ('OnellyEdit_Turbo_' + new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19) + '.mp4');
       try {
-        var kept = await T.keep({ path: st.result.path, name: nm0 });
+        var kept = st.result.kept ? { abs: st.result.abs } : await T.keep({ path: st.result.path, name: nm0 });
         setP(1); $q('#tbp').textContent = '✓'; status('✅ Done'); info((st.result.sizeMB || '') + ' MB · ' + X('b') + (st.result.par ? ' · par: ' + st.result.par : ''));
         showDone(T, kept, nm0);
       } catch (e) { fail('the finished video is not available any more'); }

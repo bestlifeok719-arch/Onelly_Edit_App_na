@@ -2041,7 +2041,11 @@ public class TurboPlugin extends Plugin {
     }
 
     /** Joins the video pieces (and the sound) without re-encoding. Throws when the pieces do not have identical codec settings. */
-    private static void stitch(List<Seg> segs, File audio, File out) throws Exception {
+    private interface ProgressCb {
+        void on(double fraction);
+    }
+
+    private static void stitch(List<Seg> segs, File audio, File out, ProgressCb progress) throws Exception {
         MediaMuxer mux = null;
         MediaExtractor ae = null;
         try {
@@ -2080,7 +2084,9 @@ public class TurboPlugin extends Plugin {
             ByteBuffer buf = ByteBuffer.allocate(12 << 20);
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
             long aT = ae != null ? ae.getSampleTime() : -1;
-            long offUs = 0;
+            long offUs = 0, totalUs = 0, lastReport = 0;
+            for (Seg sg : segs) totalUs += (sg.endMs - sg.startMs) * 1000L;
+            totalUs = Math.max(1, totalUs);
             for (Seg sg : segs) {
                 MediaExtractor e = new MediaExtractor();
                 try {
@@ -2088,10 +2094,9 @@ public class TurboPlugin extends Plugin {
                     int vt = findTrack(e, "video/");
                     e.selectTrack(vt);
                     for (; ; ) {
-                        buf.clear();
-                        int sz = e.readSampleData(buf, 0);
-                        if (sz < 0) break;
-                        long pts = e.getSampleTime() + offUs;
+                        long st = e.getSampleTime(); // the time is known BEFORE the sample is read: every sample is read once
+                        if (st < 0) break;
+                        long pts = st + offUs;
                         while (ae != null && aT >= 0 && aT <= pts) { // keep sound and picture interleaved by time
                             buf.clear();
                             int az = ae.readSampleData(buf, 0);
@@ -2105,11 +2110,15 @@ public class TurboPlugin extends Plugin {
                             aT = ae.getSampleTime();
                         }
                         buf.clear();
-                        sz = e.readSampleData(buf, 0); // (the audio loop reused the buffer)
+                        int sz = e.readSampleData(buf, 0);
                         if (sz < 0) break;
                         info.set(0, sz, pts, (e.getSampleFlags() & MediaExtractor.SAMPLE_FLAG_SYNC) != 0 ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0);
                         mux.writeSampleData(vIdx, buf, info);
                         e.advance();
+                        if (progress != null && pts - lastReport > 2_000_000L) {
+                            lastReport = pts;
+                            progress.on(Math.min(1.0, pts / (double) totalUs));
+                        }
                     }
                 } finally {
                     e.release();
@@ -2153,6 +2162,7 @@ public class TurboPlugin extends Plugin {
         Transformer audioTr;
         long mixTouched = -1;
         final long startedAt = SystemClock.elapsedRealtime();
+        boolean direct = false; // the output file is already in its final folder (no copy afterwards)
 
         ParRun(PluginCall call, File cache, File outFile, List<ClipSpec> specs, boolean legacy, int w, int h, int br) {
             this.call = call;
@@ -2226,8 +2236,8 @@ public class TurboPlugin extends Plugin {
                         else if (s.tr != null && s.tr.getProgress(ph) == Transformer.PROGRESS_STATE_AVAILABLE) got += len * ph.progress / 100.0;
                     }
                     JSObject o = new JSObject();
-                    o.put("p", tot > 0 ? Math.min(99.0, 100.0 * got / tot) : 0);
-                    jobP = tot > 0 ? Math.min(99.0, 100.0 * got / tot) : 0;
+                    o.put("p", tot > 0 ? Math.min(90.0, 90.0 * got / tot) : 0);
+                    jobP = tot > 0 ? Math.min(90.0, 90.0 * got / tot) : 0;
                     jobPhase = "pieces " + doneCount + "/" + segs.size() + " done, " + running + " at once" + (audioNeeded ? (audioDone ? ", sound done" : ", sound …") : "") + thermalNote;
                     notifyListeners("progress", o);
                     main.postDelayed(this, 500);
@@ -2357,7 +2367,13 @@ public class TurboPlugin extends Plugin {
             jobPhase = "joining the pieces";
             Thread th = new Thread(() -> {
                 try {
-                    stitch(segs, audioNeeded ? audioFile : null, outFile);
+                    stitch(segs, audioNeeded ? audioFile : null, outFile, f -> {
+                        jobP = 90 + 9 * f;
+                        jobPhase = "joining the pieces " + Math.round(f * 100) + "%";
+                        JSObject pr = new JSObject();
+                        pr.put("p", jobP);
+                        notifyListeners("progress", pr);
+                    });
                     final JSObject o = result();
                     main.post(() -> {
                         if (par != ParRun.this) return;
@@ -2406,6 +2422,8 @@ public class TurboPlugin extends Plugin {
             o.put("mixFrames", mixTouched);
             o.put("par", segs.size() + " pieces x" + maxParallel + " at once, " + specs.size() + " clip(s), joined without re-encoding, " + (SystemClock.elapsedRealtime() - startedAt) / 1000 + "s");
             o.put("path", outFile.getName());
+            o.put("abs", outFile.getAbsolutePath());
+            o.put("kept", direct);
             o.put("sizeMB", Math.round(outFile.length() / 1048.576) / 1000.0);
             return o;
         }
@@ -2465,6 +2483,15 @@ public class TurboPlugin extends Plugin {
                 return;
             }
             File cache = getContext().getCacheDir(), outFile = new File(cache, out);
+            boolean direct = false;
+            String fin = d.isNull("finalName") ? "" : d.optString("finalName", "");
+            if (!fin.isEmpty()) { // write the finished video straight into the app's export folder: no second copy of a big file afterwards
+                File kd = getContext().getExternalFilesDir("TurboExports");
+                if (kd == null) kd = new File(getContext().getFilesDir(), "TurboExports");
+                kd.mkdirs();
+                outFile = new File(kd, cleanName(fin));
+                direct = true;
+            }
             List<ClipSpec> specs;
             try {
                 specs = parseClips(d);
@@ -2500,6 +2527,7 @@ public class TurboPlugin extends Plugin {
                 return;
             }
             ParRun pr = new ParRun(call, cache, outFile, specs, legacy, call.getInt("width", 1280), call.getInt("height", 720), call.getInt("bitrate", 4000000));
+            pr.direct = direct;
             if (legacy && pr.plan() < 2) {
                 doRenderSingle(call);
                 return;
